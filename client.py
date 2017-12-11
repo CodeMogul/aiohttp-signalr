@@ -1,13 +1,9 @@
+import asyncio
+import aiohttp
 import json
 import urllib.parse as parse
-import requests
-import asyncio
 import functools
 from enum import Enum
-import websockets
-import aiohttp
-
-import pprint
 
 def buildPayload(hub_name, method_name, args, message_id):
     data = {
@@ -70,10 +66,10 @@ class Client:
             "connect": 0
         }
         self._hubs = []
-        self._cookie_jar = None
         self._websocket = None
+        self._session = aiohttp.ClientSession(headers=self._headers)
 
-    def _negotiate(self):
+    async def _negotiate(self):
         # Add client headers and proxy
         proxies = {}
         headers = {}
@@ -81,7 +77,8 @@ class Client:
         negotiate_url = self._getNegotiateUrl()
         # getRequest = functools.partial(requests.get, params=params, headers=headers, proxies=proxies)
         try:
-                res = requests.get(negotiate_url, headers=headers, proxies=proxies)
+                res = await self._session.get(negotiate_url)
+                # res = requests.get(negotiate_url, headers=headers, proxies=proxies)
         except Exception as e:
             # set client status binding error and call service handler
             raise e
@@ -97,9 +94,8 @@ class Client:
         # TransportConnectTimeout	5.0	                float
 
         try:
-            if res.status_code == 200:
-                negotiated_vals = res.json()
-                self._cookie_jar = res.cookies
+            if res.status == 200:
+                negotiated_vals = await res.json()
                 if not negotiated_vals["TryWebSockets"]:
                     # raise error This client only supports websockets
                     raise Exception('WebSocketsError: This client does not support websockets')
@@ -116,7 +112,7 @@ class Client:
                             "connect": negotiated_vals["TransportConnectTimeout"]
                         }
                     }
-            elif res.status_code == 401 or res.status_code == 302:
+            elif res.status == 401 or res.status == 302:
                 # call client unauthorised handler with res param
                 raise Exception("AuthError occured while Negotiation")
             else:
@@ -166,14 +162,13 @@ class Client:
 
     async def start(self):
         # check connnection states before doing anything
-        bindings = self._negotiate()
+        bindings = await self._negotiate()
         self._timeouts.update(bindings['timeouts'])
         self._connection.update(bindings['connection'])
 
         connect_url = self._getConnectUrl()
-        cookies = ';'.join(['{}={}'.format(k,v) for k,v in self._cookie_jar.iteritems()])
 
-        self._websocket = await websockets.client.connect(connect_url, extra_headers={'cookie': cookies})
+        self._websocket = await self._session.ws_connect(connect_url)
         print(dir(self._websocket))
         print('\n\n')
 
@@ -182,8 +177,8 @@ class Client:
         # res = await self._websocket.recv():
         #     if 
         start_url = self._getStartUrl()
-        res = requests.get(start_url, cookies=self._cookie_jar)
-        if res.status_code == 200:
+        res = await self._session.get(start_url)
+        if res.status == 200:
             print(res.text)
             print('\n\n')
 
@@ -193,14 +188,19 @@ class Client:
         self._connection["messageId"] += 1
         m_id = self._connection["messageId"]
         payload = buildPayload(hub_name.lower(), function, args, m_id)
-        await self._websocket.send(payload)
+        await self._websocket.send_str(payload)
+        message = await self._websocket.receive_str()
+        print("Command {} sent: Res {}".format(function, message))
 
     async def recv(self):
         if self._websocket is None:
             raise Exception("Recieve called before Connection Initiation")
-        message = await self._websocket.recv()
-        return message
+        message = await self._websocket.receive()
+        # if msg.type == aiohttp.WSMsgType.TEXT:
+
+        return message.data
 
     async def disconnect(self):
         # Reset connection Ids and tokens etc
         await self._websocket.close()
+        self._session.close()
