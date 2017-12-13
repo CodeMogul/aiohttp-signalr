@@ -1,3 +1,4 @@
 trash
 venv
 .vscode
+__pycache__

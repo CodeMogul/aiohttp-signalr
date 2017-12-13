@@ -129,7 +129,7 @@ class Client:
         }
 
         # Add user query_params
-        negotiate_url = self._url + '/negotiate?' + parse.urlencode(qs)
+        negotiate_url = self._url + '/negotate?' + parse.urlencode(qs)
         return negotiate_url
 
     def _getConnectUrl(self):
@@ -203,4 +203,12 @@ class Client:
     async def disconnect(self):
         # Reset connection Ids and tokens etc
         await self._websocket.close()
-        self._session.close()
+        await self._session.close()
+
+    async def __aenter__(self):
+        
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        await self._websocket.close()
+        await self._session.close()
